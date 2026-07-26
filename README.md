@@ -108,3 +108,7 @@ cmake --build tests/build
 - `src/ui/` — Qt dock widget and settings dialog.
 - `src/settings/` — JSON persistence via `obs_module_config_path` + `obs_data_t`.
 - `src/plugin-main.cpp` — wires everything together in `obs_module_load`/`obs_module_unload`.
+
+## Acknowledgments
+
+Built with the help of [Claude Code](https://claude.com/claude-code) (Anthropic).
