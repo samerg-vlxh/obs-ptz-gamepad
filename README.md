@@ -1,59 +1,86 @@
-# OBS Plugin Template
+# obs-ptz-gamepad
 
-## Introduction
+Native OBS Studio plugin (macOS, Apple Silicon) that drives two VISCA-over-IP PTZ cameras from an
+Xbox controller. Loads automatically when OBS starts — no separate script or app to launch.
 
-The plugin template is meant to be used as a starting point for OBS Studio plugin development. It includes:
+Ported from an earlier standalone Python/pygame script (`ptz_v4.py`), which this plugin's
+control logic (`src/control/PtzController.*`) replicates behaviorally, plus two deliberate
+improvements:
 
-* Boilerplate plugin source code
-* A CMake project file
-* GitHub Actions workflows and repository actions
+- Switching the active camera now stops the outgoing camera (it used to keep moving unnoticed).
+- Controller input goes through Apple's `GameController.framework` semantic button/stick
+  properties instead of raw SDL indices, removing an LB/RB mapping ambiguity that existed in the
+  Python version.
 
-## Supported Build Environments
+## Controls
 
-| Platform  | Tool   |
-|-----------|--------|
-| Windows   | Visual Studio 17 2022 |
-| macOS     | XCode 16.0 |
-| Windows, macOS  | CMake 3.30.5 |
-| Ubuntu 24.04 | CMake 3.28.3 |
-| Ubuntu 24.04 | `ninja-build` |
-| Ubuntu 24.04 | `pkg-config`
-| Ubuntu 24.04 | `build-essential` |
+- **A / B** — select camera 1 / camera 2
+- **Left shoulder / right shoulder** — zoom out / zoom in (held)
+- **Left stick** — pan/tilt at normal speed
+- **Right stick** — pan/tilt at a slower ("fine") speed; ignored while the left stick is deflected
 
-## Quick Start
+IPs, VISCA port, and all speed/deadzone values are editable from the plugin's dock
+("Settings...") — see `src/settings/PtzSettings.*`. Defaults match the original Python script
+(`192.168.20.41` / `192.168.20.42`, port `52381`).
 
-An absolute bare-bones [Quick Start Guide](https://github.com/obsproject/obs-plugintemplate/wiki/Quick-Start-Guide) is available in the wiki.
+## Building
 
-## Documentation
+Requires: full Xcode.app (not just the Command Line Tools — the macOS build uses CMake's `Xcode`
+generator), `cmake`, `ninja` (`brew install cmake ninja`).
 
-All documentation can be found in the [Plugin Template Wiki](https://github.com/obsproject/obs-plugintemplate/wiki).
+```
+cmake --preset macos-arm64
+cmake --build --preset macos-arm64
+```
 
-Suggested reading to get up and running:
+The first configure downloads OBS sources, prebuilt obs-deps, and prebuilt Qt6 (see
+`buildspec.json`) and builds libobs from source — this takes a few minutes and needs network
+access. Subsequent configures/builds are incremental.
 
-* [Getting started](https://github.com/obsproject/obs-plugintemplate/wiki/Getting-Started)
-* [Build system requirements](https://github.com/obsproject/obs-plugintemplate/wiki/Build-System-Requirements)
-* [Build system options](https://github.com/obsproject/obs-plugintemplate/wiki/CMake-Build-System-Options)
+Output bundle: `build_macos_arm64/RelWithDebInfo/obs-ptz-gamepad.plugin`.
 
-## GitHub Actions & CI
+### AGL.framework build workaround (macOS SDK Xcode 26+)
 
-Default GitHub Actions workflows are available for the following repository actions:
+The prebuilt Qt6 dependency unconditionally links `-framework AGL` on Apple platforms (see its
+`FindWrapOpenGL.cmake`). Recent macOS SDKs no longer ship a linkable AGL binary (Apple left an
+empty compatibility stub with a broken symlink). `CMakeLists.txt` works around this by building a
+throwaway empty stub framework at configure time and combining it with `-dead_strip_dylibs`, so
+the final binary carries zero runtime dependency on AGL. If Apple ever restores a real AGL binary
+to the SDK, this workaround becomes a no-op (the `NOT WrapOpenGL_AGL` guard skips it once a real
+one is found).
 
-* `push`: Run for commits or tags pushed to `master` or `main` branches.
-* `pr-pull`: Run when a Pull Request has been pushed or synchronized.
-* `dispatch`: Run when triggered by the workflow dispatch in GitHub's user interface.
-* `build-project`: Builds the actual project and is triggered by other workflows.
-* `check-format`: Checks CMake and plugin source code formatting and is triggered by other workflows.
+## Installing
 
-The workflows make use of GitHub repository actions (contained in `.github/actions`) and build scripts (contained in `.github/scripts`) which are not needed for local development, but might need to be adjusted if additional/different steps are required to build the plugin.
+```
+codesign --force --deep --sign - build_macos_arm64/RelWithDebInfo/obs-ptz-gamepad.plugin
+cp -R build_macos_arm64/RelWithDebInfo/obs-ptz-gamepad.plugin \
+      ~/Library/Application\ Support/obs-studio/plugins/
+```
 
-### Retrieving build artifacts
+Ad-hoc signing is sufficient for local use; OBS loads third-party ad-hoc-signed plugins from the
+user plugins directory without further Gatekeeper steps. Restart OBS to pick up a rebuilt plugin.
 
-Successful builds on GitHub Actions will produce build artifacts that can be downloaded for testing. These artifacts are commonly simple archives and will not contain package installers or installation programs.
+## Testing the control logic without OBS or a camera
 
-### Building a Release
+`tests/` is a standalone CMake project with no libobs/Qt/Cocoa dependency, covering the VISCA byte
+layer and the `PtzController` state machine (deadzone persistence, stick priority, direction-byte
+mapping, camera-switch behavior, shutdown):
 
-To create a release, an appropriately named tag needs to be pushed to the `main`/`master` branch using semantic versioning (e.g., `12.3.4`, `23.4.5-beta2`). A draft release will be created on the associated repository with generated installer packages or installation programs attached as release artifacts.
+```
+cmake -S tests -B tests/build -G Ninja
+cmake --build tests/build
+./tests/build/test_visca_packets
+./tests/build/test_ptz_controller
+```
 
-## Signing and Notarizing on macOS
+## Architecture
 
-Basic concepts of codesigning and notarization on macOS are explained in the correspodning [Wiki article](https://github.com/obsproject/obs-plugintemplate/wiki/Codesigning-On-macOS) which has a specific section for the [GitHub Actions setup](https://github.com/obsproject/obs-plugintemplate/wiki/Codesigning-On-macOS#setting-up-code-signing-for-github-actions).
+- `src/visca/` — VISCA-over-IP UDP protocol (`ViscaCamera`, `UdpViscaTransport`), no OBS
+  dependency.
+- `src/control/` — `PtzController`, the ported state machine; no OBS/Cocoa dependency, directly
+  unit-testable.
+- `src/input/` — `GameControllerBridge` (Objective-C++), bridges `GameController.framework` to the
+  plain-C++ `IControllerEventSink` interface.
+- `src/ui/` — Qt dock widget and settings dialog.
+- `src/settings/` — JSON persistence via `obs_module_config_path` + `obs_data_t`.
+- `src/plugin-main.cpp` — wires everything together in `obs_module_load`/`obs_module_unload`.

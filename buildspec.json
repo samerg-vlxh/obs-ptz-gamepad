@@ -33,13 +33,13 @@
     },
     "platformConfig": {
         "macos": {
-            "bundleId": "com.example.plugintemplate-for-obs"
+            "bundleId": "de.merg.obs-ptz-gamepad"
         }
     },
-    "name": "plugintemplate-for-obs",
-    "displayName": "Plugin Template for OBS",
-    "version": "1.0.0",
-    "author": "Your Name Here",
-    "website": "https://example.com",
-    "email": "me@example.com"
+    "name": "obs-ptz-gamepad",
+    "displayName": "PTZ Gamepad Controller",
+    "version": "0.1.0",
+    "author": "Sascha",
+    "website": "https://merg.de",
+    "email": "sascha@merg.de"
 }
