@@ -71,6 +71,37 @@ void logToDock(const std::string &message) {
                                Q_ARG(QString, QString::fromStdString(message)));
 }
 
+// Raw (pre-deadzone) values, indexed the same way as PtzController's internal lastAxis_: LeftX,
+// LeftY, RightX, RightY. Tracked separately here purely for the dock's live diagnostic display -
+// PtzController's own copy stays post-deadzone and private to its control logic.
+float g_rawAxis[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+
+size_t axisSlot(PtzAxis axis) {
+    switch (axis) {
+        case PtzAxis::LeftX:
+            return 0;
+        case PtzAxis::LeftY:
+            return 1;
+        case PtzAxis::RightX:
+            return 2;
+        case PtzAxis::RightY:
+            return 3;
+    }
+    return 0;
+}
+
+void updateStickValuesLabel() {
+    if (!g_dock) {
+        return;
+    }
+    QString text = QString("L: %1, %2   R: %3, %4")
+                       .arg(g_rawAxis[0], 0, 'f', 2)
+                       .arg(g_rawAxis[1], 0, 'f', 2)
+                       .arg(g_rawAxis[2], 0, 'f', 2)
+                       .arg(g_rawAxis[3], 0, 'f', 2);
+    QMetaObject::invokeMethod(g_dock, "onStickValuesChanged", Qt::QueuedConnection, Q_ARG(QString, text));
+}
+
 // Called on the Qt main thread (PtzDockWidget::settingsRequested is a direct signal/slot
 // connection triggered by a button click), so it's safe to touch g_transport1/g_transport2 and
 // g_controller directly here without an invokeMethod hop.
@@ -135,6 +166,8 @@ public:
     }
 
     void onAxisChanged(PtzAxis axis, float rawValue) override {
+        g_rawAxis[axisSlot(axis)] = rawValue;
+        updateStickValuesLabel();
         if (g_controller) {
             g_controller->handleAxis(axis, rawValue);
         }

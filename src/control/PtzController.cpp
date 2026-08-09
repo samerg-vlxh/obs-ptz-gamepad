@@ -1,7 +1,10 @@
 #include "PtzController.h"
 
+#include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cmath>
+#include <thread>
 
 namespace {
 
@@ -19,11 +22,28 @@ size_t axisIndex(PtzAxis axis) {
     return 0;
 }
 
+// Spacing chosen to comfortably outlast typical LAN/Wi-Fi reordering and jitter windows (tens of
+// milliseconds) while staying far below anything a user could perceive as input lag - these are
+// resends of a command already sent once immediately; they only matter if that first one was lost
+// or overtaken.
+constexpr int kStopReaffirmCount = 2;
+constexpr std::chrono::milliseconds kStopReaffirmDelay{40};
+
 }  // namespace
 
 PtzController::PtzController(std::vector<IViscaSink*> cameras, PtzSpeeds speeds, float deadzone)
     : cameras_(std::move(cameras)), speeds_(speeds), deadzone_(deadzone) {
     assert(!cameras_.empty());
+    commandEpoch_.assign(cameras_.size(), 0);
+}
+
+PtzController::~PtzController() {
+    std::lock_guard<std::mutex> lock(reaffirmMutex_);
+    for (auto& future : reaffirmFutures_) {
+        if (future.valid()) {
+            future.wait();
+        }
+    }
 }
 
 void PtzController::setOnEvent(std::function<void(const std::string&)> callback) {
@@ -36,9 +56,9 @@ void PtzController::emitEvent(const std::string& message) {
     }
 }
 
-IViscaSink* PtzController::activeCam() {
+std::pair<IViscaSink*, size_t> PtzController::activeCamWithIndex() {
     std::lock_guard<std::mutex> lock(mutex_);
-    return cameras_[activeIndex_];
+    return {cameras_[activeIndex_], activeIndex_};
 }
 
 int PtzController::activeCameraIndex() const {
@@ -66,17 +86,65 @@ void PtzController::setDeadzone(float deadzone) {
     deadzone_ = deadzone;
 }
 
+void PtzController::bumpEpoch(size_t cameraIndex) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    commandEpoch_[cameraIndex]++;
+}
+
+void PtzController::pruneFinishedReaffirms() {
+    // Called with reaffirmMutex_ already held. Bounds reaffirmFutures_'s growth over a long OBS
+    // session without needing a dedicated cleanup thread - each scheduling call sweeps whatever's
+    // already finished before appending its own future.
+    reaffirmFutures_.erase(std::remove_if(reaffirmFutures_.begin(), reaffirmFutures_.end(),
+                                           [](std::future<void>& f) {
+                                               return f.wait_for(std::chrono::seconds(0)) ==
+                                                      std::future_status::ready;
+                                           }),
+                            reaffirmFutures_.end());
+}
+
+void PtzController::reaffirmStopAsync(IViscaSink* cam, size_t cameraIndex,
+                                       std::function<void(IViscaSink*)> stopAction) {
+    int epochAtSchedule;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        epochAtSchedule = commandEpoch_[cameraIndex];
+    }
+
+    std::future<void> future = std::async(std::launch::async, [this, cam, cameraIndex, epochAtSchedule,
+                                                                 stopAction = std::move(stopAction)]() {
+        for (int i = 0; i < kStopReaffirmCount; ++i) {
+            std::this_thread::sleep_for(kStopReaffirmDelay);
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (commandEpoch_[cameraIndex] != epochAtSchedule) {
+                    // A real movement/zoom command superseded this stop - back off instead of
+                    // fighting a direction the user has since actively re-engaged.
+                    return;
+                }
+            }
+            stopAction(cam);
+        }
+    });
+
+    std::lock_guard<std::mutex> lock(reaffirmMutex_);
+    pruneFinishedReaffirms();
+    reaffirmFutures_.push_back(std::move(future));
+}
+
 void PtzController::setActive(size_t index) {
     if (index >= cameras_.size()) {
         return;
     }
 
     IViscaSink* outgoing = nullptr;
+    size_t outgoingIndex = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (activeIndex_ == index) {
             return;
         }
+        outgoingIndex = activeIndex_;
         outgoing = cameras_[activeIndex_];
         activeIndex_ = index;
     }
@@ -85,6 +153,8 @@ void PtzController::setActive(size_t index) {
     // was mid-pan/zoom when you switched away. Stop it explicitly instead.
     outgoing->zoomStop();
     outgoing->panTiltStop();
+    reaffirmStopAsync(outgoing, outgoingIndex, [](IViscaSink* c) { c->zoomStop(); });
+    reaffirmStopAsync(outgoing, outgoingIndex, [](IViscaSink* c) { c->panTiltStop(); });
 
     emitEvent("Active camera -> " + std::to_string(index + 1));
 }
@@ -97,21 +167,30 @@ void PtzController::handleButtonDown(PtzButton button) {
         case PtzButton::B:
             setActive(1);
             break;
-        case PtzButton::LeftShoulder:
-            activeCam()->zoomOut(speedsSnapshot().zoom);
+        case PtzButton::LeftShoulder: {
+            auto [cam, index] = activeCamWithIndex();
+            bumpEpoch(index);
+            cam->zoomOut(speedsSnapshot().zoom);
             break;
-        case PtzButton::RightShoulder:
-            activeCam()->zoomIn(speedsSnapshot().zoom);
+        }
+        case PtzButton::RightShoulder: {
+            auto [cam, index] = activeCamWithIndex();
+            bumpEpoch(index);
+            cam->zoomIn(speedsSnapshot().zoom);
             break;
+        }
     }
 }
 
 void PtzController::handleButtonUp(PtzButton button) {
     switch (button) {
         case PtzButton::LeftShoulder:
-        case PtzButton::RightShoulder:
-            activeCam()->zoomStop();
+        case PtzButton::RightShoulder: {
+            auto [cam, index] = activeCamWithIndex();
+            cam->zoomStop();
+            reaffirmStopAsync(cam, index, [](IViscaSink* c) { c->zoomStop(); });
             break;
+        }
         case PtzButton::A:
         case PtzButton::B:
             break;
@@ -151,7 +230,7 @@ void PtzController::recomputePanTilt() {
         rightY = lastAxis_[3];
     }
 
-    IViscaSink* cam = activeCam();
+    auto [cam, index] = activeCamWithIndex();
     PtzSpeeds speeds = speedsSnapshot();
 
     // Left stick (normal speed) takes exclusive priority over the right stick (fine speed) - if
@@ -159,11 +238,14 @@ void PtzController::recomputePanTilt() {
     // is also deflected. Only when left is fully zero does right get used. Matches
     // ptz_v4.py's handle_axis exactly.
     if (leftX != 0.0f || leftY != 0.0f) {
+        bumpEpoch(index);
         cam->panTilt(speeds.pan, speeds.tilt, dirFromPan(leftX), dirFromTilt(leftY));
     } else if (rightX != 0.0f || rightY != 0.0f) {
+        bumpEpoch(index);
         cam->panTilt(speeds.finePan, speeds.fineTilt, dirFromPan(rightX), dirFromTilt(rightY));
     } else {
         cam->panTiltStop();
+        reaffirmStopAsync(cam, index, [](IViscaSink* c) { c->panTiltStop(); });
     }
 }
 

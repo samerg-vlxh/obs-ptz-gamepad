@@ -13,6 +13,7 @@ constexpr int kMaxLogLines = 200;
 PtzDockWidget::PtzDockWidget(QWidget *parent) : QWidget(parent) {
     controllerStatusLabel_ = new QLabel(tr("Controller: not connected"), this);
     activeCameraLabel_ = new QLabel(tr("Active camera: -"), this);
+    stickValuesLabel_ = new QLabel(tr("L: 0.00, 0.00   R: 0.00, 0.00"), this);
 
     eventLog_ = new QPlainTextEdit(this);
     eventLog_->setReadOnly(true);
@@ -24,6 +25,7 @@ PtzDockWidget::PtzDockWidget(QWidget *parent) : QWidget(parent) {
     auto *layout = new QVBoxLayout(this);
     layout->addWidget(controllerStatusLabel_);
     layout->addWidget(activeCameraLabel_);
+    layout->addWidget(stickValuesLabel_);
     layout->addWidget(eventLog_);
     layout->addWidget(settingsButton_);
     setLayout(layout);
@@ -39,4 +41,8 @@ void PtzDockWidget::onActiveCameraChanged(const QString &label) {
 
 void PtzDockWidget::onLogEvent(const QString &message) {
     eventLog_->appendPlainText(QDateTime::currentDateTime().toString("HH:mm:ss") + "  " + message);
+}
+
+void PtzDockWidget::onStickValuesChanged(const QString &values) {
+    stickValuesLabel_->setText(values);
 }

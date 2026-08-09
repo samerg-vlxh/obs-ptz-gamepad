@@ -20,6 +20,10 @@ public slots:
     void onControllerStatusChanged(const QString &status);
     void onActiveCameraChanged(const QString &label);
     void onLogEvent(const QString &message);
+    // Raw (pre-deadzone) stick values, updated live on every axis event. Primarily a diagnostic
+    // tool for stick drift - a resting value that doesn't settle near 0 on a released stick shows
+    // up here directly, instead of only being visible as unexplained camera movement.
+    void onStickValuesChanged(const QString &values);
 
 signals:
     void settingsRequested();
@@ -27,6 +31,7 @@ signals:
 private:
     QLabel *controllerStatusLabel_;
     QLabel *activeCameraLabel_;
+    QLabel *stickValuesLabel_;
     QPlainTextEdit *eventLog_;
     QPushButton *settingsButton_;
 };

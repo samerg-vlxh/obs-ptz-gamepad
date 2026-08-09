@@ -5,6 +5,8 @@
 ViscaCamera::ViscaCamera(std::shared_ptr<IViscaTransport> transport) : transport_(std::move(transport)) {}
 
 void ViscaCamera::sendBody(std::vector<uint8_t> body) {
+    std::lock_guard<std::mutex> lock(sendMutex_);
+
     // 8-byte VISCA-over-IP header as four big-endian uint16_t words, matching ptz_v4.py's
     // struct.pack(">HHHH", 0x0100, 8+len(body), seq, 0) exactly - hand-rolled rather than using
     // htons() tricks, since arm64 is little-endian and byte order must not depend on host order.
