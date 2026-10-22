@@ -201,7 +201,7 @@ bool obs_module_load(void) {
 
     // obs_frontend_add_dock_by_id() is safe to call here: OBS's InitOBSCallbacks() (which makes
     // the frontend API usable) runs before obs_load_all_modules2() during startup, verified
-    // against the actual OBS 31.1.1 sources this plugin was built against - no need to defer to
+    // against the OBS 31.1.1 and 32.2.2 sources - no need to defer to
     // OBS_FRONTEND_EVENT_FINISHED_LOADING.
     g_dock = new PtzDockWidget();
     QObject::connect(g_dock, &PtzDockWidget::settingsRequested, g_dock, &openSettingsDialog);

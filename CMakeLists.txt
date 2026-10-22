@@ -26,32 +26,6 @@ if(ENABLE_FRONTEND_API)
 endif()
 
 if(ENABLE_QT)
-  if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND NOT WrapOpenGL_AGL)
-    # obs-deps' prebuilt Qt6 (built 2025-07-11) unconditionally links "-framework AGL" via its
-    # FindWrapOpenGL.cmake (see .deps/obs-deps-qt6-*/lib/cmake/Qt6/FindWrapOpenGL.cmake, lines
-    # 40-49 - there is no way to opt out from our side, it always adds *some* AGL reference on
-    # Apple). Recent macOS SDKs (Xcode 26+) ship an AGL.framework stub with a broken symlink and
-    # no actual binary (Apple has fully removed the legacy Carbon-era library, just left an empty
-    # bundle for compatibility checks), so the real "-framework AGL" fails to link. Nothing in Qt6
-    # or libobs actually calls into AGL on modern macOS - it's a vestigial link requirement - so we
-    # build a throwaway empty stub .framework here and point WrapOpenGL_AGL at it. Combined with
-    # -dead_strip_dylibs below, the final binary ends up with zero runtime dependency on it.
-    set(_agl_stub_dir "${CMAKE_BINARY_DIR}/agl-stub/AGL.framework")
-    if(NOT EXISTS "${_agl_stub_dir}/AGL")
-      file(MAKE_DIRECTORY "${_agl_stub_dir}")
-      execute_process(
-        COMMAND xcrun --sdk macosx clang -dynamiclib -x c /dev/null -o "${_agl_stub_dir}/AGL"
-        RESULT_VARIABLE _agl_stub_result
-      )
-      if(NOT _agl_stub_result EQUAL 0)
-        message(FATAL_ERROR "Failed to build the AGL.framework link stub (see comment above)")
-      endif()
-    endif()
-    set(WrapOpenGL_AGL "${_agl_stub_dir}" CACHE FILEPATH
-        "Stub AGL.framework - the real one no longer ships a linkable binary on this SDK" FORCE
-    )
-  endif()
-
   find_package(Qt6 COMPONENTS Widgets Core)
   target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE Qt6::Core Qt6::Widgets)
   target_compile_options(
