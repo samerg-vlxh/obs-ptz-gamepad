@@ -18,6 +18,10 @@
 @implementation PtzControllerObserver
 
 - (void)start {
+    // Without this, macOS only delivers gamepad input while OBS is the frontmost app - the
+    // operator could not steer the cameras while working in another window.
+    GCController.shouldMonitorBackgroundEvents = YES;
+
     [[NSNotificationCenter defaultCenter] addObserver:self
                                               selector:@selector(handleControllerConnected:)
                                                   name:GCControllerDidConnectNotification
